@@ -42,7 +42,7 @@ func put(t *testing.T, path, content string, mode os.FileMode) {
 
 func testFeature(t *testing.T, root, name, relative, content string) feature {
 	t.Helper()
-	f := feature{name: name, dir: filepath.Join(root, name), store: "team", local: filepath.Base(root) == ".toggle"}
+	f := feature{name: name, dir: filepath.Join(root, name), store: "team"}
 	put(t, filepath.Join(f.dir, "source", relative), content, 0644)
 	return f
 }

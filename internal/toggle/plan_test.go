@@ -43,10 +43,7 @@ func snapshot(t *testing.T, roots ...string) map[string]string {
 
 func mustPlan(t *testing.T, r *repo, action string, f feature) *plan {
 	t.Helper()
-	cfg := config{Stores: map[string]string{}}
-	if !f.local {
-		cfg.Stores[f.store] = filepath.Dir(f.dir)
-	}
+	cfg := config{Stores: map[string]string{f.store: filepath.Dir(f.dir)}}
 	return comparedPlan(t, r, action, f, cfg)
 }
 

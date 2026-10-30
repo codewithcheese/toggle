@@ -15,12 +15,13 @@ func TestNamedStoreCLILifecycle(t *testing.T) {
 	rel := ".agents/skills/review/SKILL.md"
 	testFeature(t, team, "review", rel, "team")
 	testFeature(t, personal, "review", rel, "personal")
-	local := testFeature(t, filepath.Join(r.root, ".toggle"), "review", rel, "local edit")
+	research := filepath.Join(r.root, "research")
+	local := testFeature(t, research, "review", rel, "local edit")
 	put(t, filepath.Join(local.dir, "source/.agents/skills/review/extra.md"), "local companion", 0644)
 	os.Chmod(filepath.Join(local.dir, "source", rel), 0755)
-	cfg := testConfig(t, map[string]string{"team": team, "personal": personal})
-	// The owner chooses to ignore local definitions.
-	put(t, filepath.Join(r.root, ".git/info/exclude"), "# user rules\n/.toggle/\n", 0644)
+	cfg := testConfig(t, map[string]string{"team": team, "personal": personal, "research": research})
+	// The owner chooses to ignore the configured in-project research definitions.
+	put(t, filepath.Join(r.root, ".git/info/exclude"), "# user rules\n/research/\n", 0644)
 	beforeSources := snapshot(t, team, personal, local.dir)
 	for _, action := range []string{"on", "off"} {
 		before := snapshot(t, r.root, team, personal)
@@ -55,19 +56,19 @@ func TestNamedStoreCLILifecycle(t *testing.T) {
 		t.Fatal(code, diagnostics)
 	}
 	put(t, target, "local edit", 0755)
-	// The saved local feature is selected directly, without a team off.
-	if code, _, diagnostics := runConfigured(t, r.root, cfg, "on", "review", "--local"); code != 0 {
+	// The configured research feature is selected directly, without a team off.
+	if code, _, diagnostics := runConfigured(t, r.root, cfg, "on", "review", "--store", "research"); code != 0 {
 		t.Fatal(diagnostics)
 	}
 	if mustRead(t, filepath.Join(r.root, ".agents/skills/review/extra.md")) != "local companion" {
-		t.Fatal("partial on did not complete the local definition")
+		t.Fatal("partial on did not complete the research definition")
 	}
 	_, out, _ = runConfigured(t, r.root, cfg, "status")
-	if !strings.Contains(out, "review\t--local\tready for off") || !strings.Contains(out, "review\t--store team\tblocked") {
+	if !strings.Contains(out, "review\t--store research\tready for off") || !strings.Contains(out, "review\t--store team\tblocked") {
 		t.Fatal(out)
 	}
 	before = snapshot(t, r.root, team, personal)
-	if code, out, diagnostics := runConfigured(t, r.root, cfg, "off", "review", "--local", "--dry-run"); code != 0 || !strings.Contains(out, "remove empty directory\t.agents") {
+	if code, out, diagnostics := runConfigured(t, r.root, cfg, "off", "review", "--store", "research", "--dry-run"); code != 0 || !strings.Contains(out, "remove empty directory\t.agents") {
 		t.Fatal(code, out, diagnostics)
 	}
 	if !reflect.DeepEqual(before, snapshot(t, r.root, team, personal)) {
@@ -75,14 +76,14 @@ func TestNamedStoreCLILifecycle(t *testing.T) {
 	}
 	os.Remove(filepath.Join(r.root, ".agents/skills/review/extra.md"))
 	before = snapshot(t, r.root, team, personal)
-	if code, _, diagnostics := runConfigured(t, r.root, cfg, "off", "review", "--local"); code == 0 || !strings.Contains(diagnostics, "partial presence") {
+	if code, _, diagnostics := runConfigured(t, r.root, cfg, "off", "review", "--store", "research"); code == 0 || !strings.Contains(diagnostics, "partial presence") {
 		t.Fatal(code, diagnostics)
 	}
 	if !reflect.DeepEqual(before, snapshot(t, r.root, team, personal)) {
 		t.Fatal("partial off changed files")
 	}
 	for _, action := range []string{"on", "off", "off"} {
-		if code, _, diagnostics := runConfigured(t, r.root, cfg, action, "review", "--local"); code != 0 {
+		if code, _, diagnostics := runConfigured(t, r.root, cfg, action, "review", "--store", "research"); code != 0 {
 			t.Fatal(diagnostics)
 		}
 	}
@@ -90,7 +91,7 @@ func TestNamedStoreCLILifecycle(t *testing.T) {
 	if !reflect.DeepEqual(beforeSources, snapshot(t, team, personal, local.dir)) {
 		t.Fatal("source definitions changed")
 	}
-	if mustRead(t, filepath.Join(r.root, ".git/info/exclude")) != "# user rules\n/.toggle/\n" {
+	if mustRead(t, filepath.Join(r.root, ".git/info/exclude")) != "# user rules\n/research/\n" {
 		t.Fatal("outside exclusion bytes changed")
 	}
 	if status := testGit(t, r.root, "status", "--porcelain"); status != "" {
@@ -162,5 +163,77 @@ func TestManualLegacyTransitionKeepsMatchingCopies(t *testing.T) {
 	}
 	if !reflect.DeepEqual(beforeSource, snapshot(t, f.dir)) {
 		t.Fatal("source changed during transition")
+	}
+}
+
+func TestOrphanWorktreeStoreUsesCurrentFiles(t *testing.T) {
+	r := testRepo(t)
+	put(t, filepath.Join(r.root, "app.md"), "application history", 0644)
+	testGit(t, r.root, "add", "app.md")
+	testGit(t, r.root, "-c", "user.name=Toggle Test", "-c", "user.email=toggle@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "application")
+	store := filepath.Join(t.TempDir(), "research")
+	testGit(t, r.root, "worktree", "add", "--detach", store, "HEAD")
+	testGit(t, store, "checkout", "--orphan", "research")
+	testGit(t, store, "rm", "-rf", ".")
+	rel := ".agents/skills/review/SKILL.md"
+	f := testFeature(t, store, "review", rel, "committed version")
+	testGit(t, store, "add", ".")
+	testGit(t, store, "-c", "user.name=Toggle Test", "-c", "user.email=toggle@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "research")
+	if parents := strings.Fields(testGit(t, store, "rev-list", "--parents", "-n", "1", "HEAD")); len(parents) != 1 {
+		t.Fatal("research commit is not independent", parents)
+	}
+	put(t, filepath.Join(f.dir, "source", rel), "modified working version", 0755)
+	put(t, filepath.Join(f.dir, "source/research/new.md"), "untracked research", 0644)
+	testGit(t, r.root, "config", "remote.origin.url", "https://example.invalid/project")
+	sourceRepo, err := findRepo(context.Background(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceRepo.metadata(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.metadata(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	put(t, r.excludePath, "# user rules\n/private\n", 0644)
+	beforeSource := snapshot(t, store, sourceRepo.gitDir)
+	beforeRefs := testGit(t, r.root, "show-ref")
+	beforeConfig := mustRead(t, filepath.Join(r.commonDir, "config"))
+	beforeIndex := mustRead(t, r.indexPath)
+	cfg := testConfig(t, map[string]string{"personal": store})
+	before := snapshot(t, r.root, store)
+	if code, out, diagnostics := runConfigured(t, r.root, cfg, "on", "review", "--store", "personal", "--dry-run"); code != 0 || !strings.Contains(out, rel) || !strings.Contains(out, "research/new.md") {
+		t.Fatal(code, out, diagnostics)
+	}
+	if !reflect.DeepEqual(before, snapshot(t, r.root, store)) {
+		t.Fatal("worktree preview changed files")
+	}
+	if code, _, diagnostics := runConfigured(t, r.root, cfg, "on", "review", "--store", "personal"); code != 0 {
+		t.Fatal(diagnostics)
+	}
+	if mustRead(t, filepath.Join(r.root, rel)) != "modified working version" || mustRead(t, filepath.Join(r.root, "research/new.md")) != "untracked research" {
+		t.Fatal("worktree sources required a commit")
+	}
+	if info, err := os.Stat(filepath.Join(r.root, rel)); err != nil || info.Mode().Perm()&0111 != 0111 {
+		t.Fatal("executable bits not copied", info, err)
+	}
+	for _, path := range []string{rel, "research/new.md"} {
+		if match := testGit(t, r.root, "check-ignore", "-v", path); !strings.Contains(match, "info/exclude") {
+			t.Fatal("target exclusions are not Git-local", match)
+		}
+	}
+	if code, out, diagnostics := runConfigured(t, r.root, cfg, "status"); code != 0 || !strings.Contains(out, "review\t--store personal\tready for off") {
+		t.Fatal(code, out, diagnostics)
+	}
+	if code, _, diagnostics := runConfigured(t, r.root, cfg, "off", "review", "--store", "personal"); code != 0 {
+		t.Fatal(diagnostics)
+	}
+	assertAbsent(t, filepath.Join(r.root, ".agents"))
+	assertAbsent(t, filepath.Join(r.root, "research"))
+	if !reflect.DeepEqual(beforeSource, snapshot(t, store, sourceRepo.gitDir)) || beforeRefs != testGit(t, r.root, "show-ref") || beforeConfig != mustRead(t, filepath.Join(r.commonDir, "config")) || beforeIndex != mustRead(t, r.indexPath) {
+		t.Fatal("source files, Git HEADs, refs, indexes, or remotes changed")
+	}
+	if mustRead(t, r.excludePath) != "# user rules\n/private\n" {
+		t.Fatal("target exclusion rules not restored")
 	}
 }

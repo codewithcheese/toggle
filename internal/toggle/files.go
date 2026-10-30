@@ -152,19 +152,16 @@ func (r *repo) destination(declared string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		for i, component := range strings.Split(relative, string(filepath.Separator)) {
+		for _, component := range strings.Split(relative, string(filepath.Separator)) {
 			if r.reservedName(component, ".git") {
 				return "", fmt.Errorf("reserved .git destination: %s -> %s", path, resolved)
-			}
-			if i == 0 && r.reservedName(component, ".toggle") {
-				return "", fmt.Errorf("reserved .toggle destination: %s -> %s", path, resolved)
 			}
 		}
 		if r.reservedName(filepath.Base(target), ".gitignore") {
 			return "", fmt.Errorf("reserved .gitignore destination: %s -> %s", path, resolved)
 		}
 	}
-	for _, reserved := range []string{filepath.Join(r.root, ".toggle"), filepath.Join(r.root, ".git"), r.gitDir, r.commonDir} {
+	for _, reserved := range []string{filepath.Join(r.root, ".git"), r.gitDir, r.commonDir} {
 		if reserved == "" {
 			continue
 		}

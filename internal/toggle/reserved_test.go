@@ -74,7 +74,7 @@ func TestTopLevelIgnoreMetadataIsNotInstalled(t *testing.T) {
 
 func TestFilesystemCaseAliasesCannotBypassReservedPaths(t *testing.T) {
 	r := testRepo(t)
-	for _, relative := range []string{".GIT/config", "nested/.GIT/config", "nested/.GITIGNORE", ".TOGGLE/other/source/file.md"} {
+	for _, relative := range []string{".GIT/config", "nested/.GIT/config", "nested/.GITIGNORE"} {
 		resolved, err := r.destination(relative)
 		if r.reservedName(".GIT", ".git") && err == nil {
 			t.Fatalf("accepted case alias %s -> %s", relative, resolved)

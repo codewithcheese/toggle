@@ -11,25 +11,79 @@ import (
 	"strings"
 )
 
-const usage = `Usage:
-  toggle list
-  toggle status
-  toggle on <feature> [--local | --store <name>] [--dry-run]
-  toggle off <feature> [--local | --store <name>] [--dry-run]
+const usage = `Toggle lets you add optional skills, agent instructions, configuration,
+and research files to a project when needed, then remove them when finished.
 
-On/off and previews require the Git repo root. Status works throughout a repo.
-Use --local or --store to disambiguate names; neither source takes precedence.
-Config: ~/.config/toggle/config.json (optional for local-only use)
-  {"stores":{"team":"/absolute/path/to/feature-repo"}}
-Store layout: <store>/<feature>/source/<repo-relative files>
-Local layout: <repo>/.toggle/<feature>/source/<repo-relative files>
-You manage store checkouts with Git. Toggle does not clone or update them.
+Group files you want to add and remove together into a named feature.
+A store is a directory that holds these features. Each feature has a
+source/ directory containing the files to copy, arranged as they should
+appear in the project.
+
+Turning a feature on copies missing files into the project and leaves
+existing matching files in place. Their paths are added to Git's local
+exclude file, keeping them out of normal staging without changing .gitignore.
+Turning it off removes its project files only when all match the current
+source, then removes Toggle's exclusions for those paths.
+
+The source files stay in the store for reuse. Toggle does not save project
+edits back to the store. With stores outside the project, inactive source
+files stay out of ordinary project searches.
+
+Usage:
+  toggle list                     List features with stores and source paths.
+  toggle status                   Show matches ready for off and blockers.
+  toggle on <feature> [--store <name>] [--dry-run]
+  toggle off <feature> [--store <name>] [--dry-run]
+  toggle --help
+
+Run on/off, including previews, from the target Git repo root.
+Status works throughout that repo. List also works outside Git.
+--dry-run validates and previews changes without writing.
+Status returns success for a completed scan, even with blockers.
+
+Stores:
+  Configure named stores in ~/.config/toggle/config.json:
+
+    {"stores":{"personal":"/absolute/path/to/features"}}
+
+  Store paths must be absolute. This config applies to every project.
+  With no configured stores, toggle list is empty.
+  Use --store <name> when a feature name occurs in multiple stores.
+  Toggle reads current source files, including uncommitted changes.
+
+Feature layout:
+  <store-path>/<feature>/source/<project-relative files>
+
+  Turning on review copies review/source/.agents/skills/review/SKILL.md
+  from the store to .agents/skills/review/SKILL.md in the project.
+
+  A feature's name is its directory name; no manifest is needed.
+  Only source/ contents are copied.
+
+Matching and protection:
+  Existing files at selected paths must match source contents and
+  executable bits. Off requires all selected files to match or all to
+  be absent; partial presence blocks off. Comparisons use current source
+  files, without installation history.
+
+  On/off validate before writing. A failure while applying changes can
+  leave partial results.
+
+  Tracked destinations, .gitignore files, .git entries and descendants,
+  Git metadata, and configured feature directories are protected.
+
+Repo-specific features:
+  You can keep these in an external Git worktree of an orphan branch
+  with independent history. Configure its directory like any other store.
+  Manage worktrees, commits, and sharing with ordinary Git.
+
+Example:
+  toggle on review --store personal --dry-run
 `
 
 type command struct {
 	action, name string
 	dryRun       bool
-	local        bool
 	store        string
 }
 
@@ -61,8 +115,6 @@ func parse(args []string) (command, error) {
 			literal = true
 		case !literal && arg == "--dry-run":
 			c.dryRun = true
-		case !literal && arg == "--local":
-			c.local = true
 		case !literal && arg == "--store":
 			if i+1 >= len(args) || args[i+1] == "" || c.store != "" {
 				return c, fmt.Errorf("--store requires one store name")
@@ -79,9 +131,6 @@ func parse(args []string) (command, error) {
 			}
 			c.name = arg
 		}
-	}
-	if c.local && c.store != "" {
-		return c, fmt.Errorf("--local and --store are mutually exclusive")
 	}
 	if c.name == "" || c.name == "." || c.name == ".." || filepath.Base(c.name) != c.name {
 		return c, fmt.Errorf("%s requires one feature directory name", c.action)
@@ -153,7 +202,7 @@ func (a *app) execute(ctx context.Context, c command) error {
 	if err != nil {
 		return err
 	}
-	features, err := definitions(cfg, r, c)
+	features, err := definitions(cfg, c)
 	if err != nil {
 		return err
 	}

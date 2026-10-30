@@ -132,9 +132,9 @@ func (v *comparisonView) trackedPath(paths ...string) string {
 }
 
 // Only directory metadata is read for protection. An unrelated unavailable
-// checkout cannot prevent explicit selection of a usable local definition.
+// store cannot prevent explicit selection of an available named store.
 func protectedDefinitions(c config, r *repo, selected []feature) ([]string, error) {
-	roots := []string{filepath.Join(r.root, ".toggle")}
+	var roots []string
 	for _, name := range sortedNames(c.Stores) {
 		roots = append(roots, c.Stores[name])
 	}

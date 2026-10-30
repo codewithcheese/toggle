@@ -22,14 +22,14 @@ func TestSourceTreeAndDestinations(t *testing.T) {
 	if files[1].relative != "run.sh" || files[1].content.exec != 0111 {
 		t.Fatalf("mode/path: %+v", files[1])
 	}
-	for _, relative := range []string{"../outside", ".git/config", ".gitignore", "nested/.gitignore", "nested/.git", "nested/.git/config", ".toggle/other/source/a.md"} {
+	for _, relative := range []string{"../outside", ".git/config", ".gitignore", "nested/.gitignore", "nested/.git", "nested/.git/config"} {
 		if _, err := r.destination(relative); err == nil {
 			t.Errorf("accepted %s", relative)
 		}
 	}
 	os.Symlink(".toggle", filepath.Join(r.root, "definitions"))
-	if _, err := r.destination("definitions/other.md"); err == nil {
-		t.Fatal("accepted alias into .toggle")
+	if _, err := r.destination("definitions/other.md"); err != nil {
+		t.Fatal("rejected ordinary .toggle destination", err)
 	}
 	os.Symlink(t.TempDir(), filepath.Join(r.root, "outside"))
 	if _, err := r.destination("outside/skill.md"); err == nil {

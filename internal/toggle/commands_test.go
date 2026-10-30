@@ -199,3 +199,139 @@ func TestCLIPartialFailureHasNoRecordLocations(t *testing.T) {
 		t.Fatal(code, out.String(), diagnostics.String())
 	}
 }
+
+func TestConfiguredOnlyCatalogLocations(t *testing.T) {
+	r := testRepo(t)
+	sub, outside := filepath.Join(r.root, "docs"), t.TempDir()
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	testFeature(t, filepath.Join(r.root, ".toggle"), "implicit", "hidden.md", "not configured")
+	store := t.TempDir()
+	f := testFeature(t, store, "review", "instructions.md", "configured")
+	for _, scenario := range []struct {
+		configPath string
+		want       string
+	}{
+		{filepath.Join(t.TempDir(), "missing.json"), ""},
+		{testConfig(t, map[string]string{}), ""},
+		{testConfig(t, map[string]string{"team": store}), "review\t--store team\t" + f.dir + "\n"},
+	} {
+		for _, cwd := range []string{r.root, sub, outside} {
+			code, out, diagnostics := runConfigured(t, cwd, scenario.configPath, "list")
+			if code != 0 || out != scenario.want {
+				t.Fatal("configured catalog changed with location", cwd, code, out, diagnostics)
+			}
+		}
+	}
+}
+
+func TestExplicitStoreIgnoresUnavailableExternalStore(t *testing.T) {
+	r := testRepo(t)
+	store := t.TempDir()
+	testFeature(t, store, "review", "instructions.md", "source")
+	cfg := testConfig(t, map[string]string{"team": store, "missing": filepath.Join(t.TempDir(), "missing")})
+	for _, args := range [][]string{{"list"}, {"status"}, {"on", "review"}, {"off", "review"}} {
+		if code, _, diagnostics := runConfigured(t, r.root, cfg, args...); code == 0 || !strings.Contains(diagnostics, "missing") {
+			t.Fatal("unavailable full catalog accepted", args, code, diagnostics)
+		}
+	}
+	for _, action := range []string{"on", "off"} {
+		if code, _, diagnostics := runConfigured(t, r.root, cfg, action, "review", "--store", "team"); code != 0 {
+			t.Fatal(action, diagnostics)
+		}
+	}
+}
+
+func TestToggleDirectoryIsAnOrdinaryDestination(t *testing.T) {
+	r := testRepo(t)
+	store := t.TempDir()
+	// Even an unregistered source-shaped tree has no implicit protection.
+	unregistered := testFeature(t, filepath.Join(r.root, ".toggle"), "notes", "old.md", "retain")
+	f := testFeature(t, store, "review", ".toggle/notes/source/new.md", "ordinary destination")
+	cfg := testConfig(t, map[string]string{"team": store})
+	for _, args := range [][]string{{"on", "review", "--dry-run"}, {"on", "review"}, {"off", "review"}} {
+		if code, _, diagnostics := runConfigured(t, r.root, cfg, args...); code != 0 {
+			t.Fatal(args, diagnostics)
+		}
+		if len(args) == 2 && args[0] == "on" {
+			if mustRead(t, filepath.Join(r.root, ".toggle/notes/source/new.md")) != "ordinary destination" {
+				t.Fatal("destination was not installed")
+			}
+		}
+	}
+	assertAbsent(t, filepath.Join(r.root, ".toggle/notes/source/new.md"))
+	if mustRead(t, filepath.Join(unregistered.dir, "source/old.md")) != "retain" || mustRead(t, filepath.Join(f.dir, "source/.toggle/notes/source/new.md")) != "ordinary destination" {
+		t.Fatal("source or unrelated file changed")
+	}
+}
+
+func TestConfiguredInProjectDefinitionsAreProtected(t *testing.T) {
+	for _, rootName := range []string{".toggle", "catalog"} {
+		t.Run(rootName, func(t *testing.T) {
+			r := testRepo(t)
+			store := filepath.Join(r.root, rootName)
+			f := testFeature(t, store, "notes", "notes.md", "research")
+			// A configured store alias must protect the real definitions too.
+			storeAlias := filepath.Join(t.TempDir(), "store")
+			if err := os.Symlink(store, storeAlias); err != nil {
+				t.Fatal(err)
+			}
+			external := t.TempDir()
+			cfg := testConfig(t, map[string]string{"research": storeAlias, "team": external, "missing": filepath.Join(t.TempDir(), "missing")})
+			for _, action := range []string{"on", "off"} {
+				if code, _, diagnostics := runConfigured(t, r.root, cfg, action, "notes", "--store", "research"); code != 0 {
+					t.Fatal("configured in-project store is unusable", diagnostics)
+				}
+			}
+			if err := os.Symlink(rootName, filepath.Join(r.root, "alias")); err != nil {
+				t.Fatal(err)
+			}
+			for _, target := range []string{rootName + "/notes/source/notes.md", "alias/notes/source/notes.md", rootName + "/notes/README.md"} {
+				attack := testFeature(t, external, "attack", target, "research")
+				before := snapshot(t, r.root, external)
+				for _, action := range []string{"on", "off"} {
+					if code, _, diagnostics := runConfigured(t, r.root, cfg, action, "attack", "--store", "team"); code == 0 || !strings.Contains(diagnostics, "protected feature definition") {
+						t.Fatal("unselected definition not protected", target, code, diagnostics)
+					}
+				}
+				if !reflect.DeepEqual(before, snapshot(t, r.root, external)) {
+					t.Fatal("protection rejection changed files")
+				}
+				if err := os.RemoveAll(attack.dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			put(t, filepath.Join(f.dir, "source", rootName, "notes/self.md"), "self overwrite", 0644)
+			if code, _, diagnostics := runConfigured(t, r.root, cfg, "on", "notes", "--store", "research"); code == 0 || !strings.Contains(diagnostics, "protected feature definition") {
+				t.Fatal("selected definition not protected", code, diagnostics)
+			}
+		})
+	}
+}
+
+func TestHelpOutsideGitWithMissingOrMalformedConfig(t *testing.T) {
+	cwd := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	for _, malformed := range []bool{false, true} {
+		if malformed {
+			put(t, configPath, "invalid JSON", 0644)
+		}
+		before := snapshot(t, cwd, filepath.Dir(configPath))
+		code, out, diagnostics := runConfigured(t, cwd, configPath, "--help")
+		if code != 0 || diagnostics != "" {
+			t.Fatal(code, out, diagnostics)
+		}
+		for _, text := range []string{"Group files", "A store is a directory", "Git's local", "toggle on <feature> [--store <name>] [--dry-run]", "config.json", "source/<project-relative files>", "orphan branch", "toggle on review --store personal --dry-run"} {
+			if !strings.Contains(out, text) {
+				t.Fatal("help lacks setup/model information", text, out)
+			}
+		}
+		if strings.Index(out, "A store is a directory") > strings.Index(out, "Usage:") || strings.Contains(out, "--local") {
+			t.Fatal("help does not explain the agreed model before syntax", out)
+		}
+		if !reflect.DeepEqual(before, snapshot(t, cwd, filepath.Dir(configPath))) {
+			t.Fatal("help changed files")
+		}
+	}
+}

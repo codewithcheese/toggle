@@ -30,7 +30,7 @@ func TestConfig(t *testing.T) {
 			t.Fatal("config read changed files")
 		}
 	}
-	for _, data := range []string{`null`, `[]`, `true`, `{`, `{} {}`, `{"stores":null}`, `{"stores":[]}`, `{"stores":{"":"/tmp"}}`, `{"stores":{"team":false}}`, `{"stores":{"team":"relative/path"}}`, `{"stores":{"team":""}}`, `{"storres":{}}`} {
+	for _, data := range []string{``, `{"stores":{"  ":"/tmp"}}`, `null`, `[]`, `true`, `{`, `{} {}`, `{"stores":null}`, `{"stores":[]}`, `{"stores":{"":"/tmp"}}`, `{"stores":{"team":false}}`, `{"stores":{"team":"relative/path"}}`, `{"stores":{"team":""}}`, `{"storres":{}}`} {
 		put(t, path, data, 0644)
 		if _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), path) {
 			t.Fatal("invalid config accepted", data, err)

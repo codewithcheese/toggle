@@ -7,7 +7,6 @@ import (
 type feature struct {
 	name, dir string
 	store     string
-	local     bool
 }
 
 func sortedNames[T any](items map[string]T) []string {

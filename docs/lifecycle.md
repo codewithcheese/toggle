@@ -20,13 +20,13 @@ Toggle compares the current definition with current repo files. A match includes
 
 Git-tracked files, unsafe paths, and protected source definitions conflict even when contents match. Known conflicts stop the whole operation before persistent changes. Previews use the same checks and write nothing.
 
-## Local forks and edits
+## Forks and edits
 
-An agent can prepare `.toggle/review/source/` containing the desired current files and executable modes. It can then select that definition directly:
+An agent can prepare `review/source/` in a configured research store with the desired current files and executable modes. It can then select that definition directly:
 
 ```sh
-toggle on review --local
-toggle off review --local
+toggle on review --store project-research
+toggle off review --store project-research
 ```
 
 No off against the original store, ownership transfer, force mode, or automatic save step is involved. A differing repo file must be reconciled explicitly with the selected source first. Toggle reports paths and reasons, not generated diffs, and never changes the source definition.

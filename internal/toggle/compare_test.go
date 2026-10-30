@@ -121,8 +121,8 @@ func TestAllCoLocatedDefinitionsAreProtected(t *testing.T) {
 	checks := testFeature(t, store, "checks", "config.md", "same")
 	put(t, filepath.Join(store, "README.md"), "store metadata", 0644)
 	f := testFeature(t, filepath.Join(r.root, ".toggle"), "review", "catalog/checks/source/config.md", "same")
-	f.local = true
-	cfg := config{Stores: map[string]string{"team": store, "unavailable": filepath.Join(t.TempDir(), "missing")}}
+	f.store = "research"
+	cfg := config{Stores: map[string]string{"team": store, "research": filepath.Dir(f.dir), "unavailable": filepath.Join(t.TempDir(), "missing")}}
 	for _, action := range []string{"on", "off"} {
 		p := comparedPlan(t, r, action, f, cfg)
 		if p.err() == nil || !strings.Contains(p.err().Error(), "protected feature definition") {
@@ -146,12 +146,13 @@ func TestComparisonIgnoresHistoryAndAllowsMatchingFork(t *testing.T) {
 	if p := comparedPlan(t, r, "off", f, config{}); p.err() == nil {
 		t.Fatal("source mismatch accepted")
 	}
-	local := testFeature(t, filepath.Join(r.root, ".toggle"), "review", "instructions.md", "edited version")
-	local.local = true
-	os.Chmod(filepath.Join(local.dir, "source/instructions.md"), 0755)
+	fork := testFeature(t, filepath.Join(r.root, ".toggle"), "review", "instructions.md", "edited version")
+	fork.store = "research"
+	os.Chmod(filepath.Join(fork.dir, "source/instructions.md"), 0755)
+	cfg := config{Stores: map[string]string{"research": filepath.Dir(fork.dir)}}
 	for _, action := range []string{"on", "off"} {
-		if p := comparedPlan(t, r, action, local, config{}); p.err() != nil {
-			t.Fatal("matching local fork required a handoff", p.err())
+		if p := comparedPlan(t, r, action, fork, cfg); p.err() != nil {
+			t.Fatal("matching configured fork required a handoff", p.err())
 		}
 	}
 }

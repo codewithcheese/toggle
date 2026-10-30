@@ -8,9 +8,6 @@ import (
 )
 
 func (f feature) selector() string {
-	if f.local {
-		return "--local"
-	}
 	return "--store " + shellQuote(f.store)
 }
 
@@ -25,11 +22,8 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func discoverRoot(root, store string, local, optional bool) ([]feature, error) {
+func discoverRoot(root, store string) ([]feature, error) {
 	entries, err := os.ReadDir(root)
-	if optional && os.IsNotExist(err) {
-		return nil, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("source %s (%s): %w", store, root, err)
 	}
@@ -51,36 +45,23 @@ func discoverRoot(root, store string, local, optional bool) ([]feature, error) {
 			return nil, fmt.Errorf("source %s: %w", dir, err)
 		}
 		if source.IsDir() {
-			features = append(features, feature{name: entry.Name(), dir: dir, store: store, local: local})
+			features = append(features, feature{name: entry.Name(), dir: dir, store: store})
 		}
 	}
 	return features, nil
 }
 
-func definitions(c config, r *repo, cmd command) ([]feature, error) {
-	if cmd.local {
-		if r == nil {
-			return nil, fmt.Errorf("--local requires a Git repo")
-		}
-		return discoverRoot(filepath.Join(r.root, ".toggle"), "local", true, true)
-	}
+func definitions(c config, cmd command) ([]feature, error) {
 	if cmd.store != "" {
 		root, ok := c.Stores[cmd.store]
 		if !ok {
 			return nil, fmt.Errorf("unknown store %q in config", cmd.store)
 		}
-		return discoverRoot(root, cmd.store, false, false)
+		return discoverRoot(root, cmd.store)
 	}
 	var all []feature
-	if r != nil {
-		local, err := discoverRoot(filepath.Join(r.root, ".toggle"), "local", true, true)
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, local...)
-	}
 	for _, name := range sortedNames(c.Stores) {
-		features, err := discoverRoot(c.Stores[name], name, false, false)
+		features, err := discoverRoot(c.Stores[name], name)
 		if err != nil {
 			return nil, err
 		}
