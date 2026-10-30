@@ -322,12 +322,12 @@ func TestHelpOutsideGitWithMissingOrMalformedConfig(t *testing.T) {
 		if code != 0 || diagnostics != "" {
 			t.Fatal(code, out, diagnostics)
 		}
-		for _, text := range []string{"feature named review", "directory called a store", "local exclude file", "toggle on <feature> [--store <name>] [--dry-run]", "config.json", ".agents/skills/review/SKILL.md", "orphan branch", "toggle on review --store personal --dry-run"} {
+		for _, text := range []string{"named feature", "called a store", "local exclude file", "toggle on <feature> [--store <name>] [--dry-run]", "config.json", ".agents/skills/review/SKILL.md", "orphan branch", "toggle on review --store personal --dry-run"} {
 			if !strings.Contains(out, text) {
 				t.Fatal("help lacks setup/model information", text, out)
 			}
 		}
-		if strings.Index(out, "directory called a store") > strings.Index(out, "Usage:") || strings.Contains(out, "--local") {
+		if strings.Index(out, "called a store") > strings.Index(out, "Usage:") || strings.Contains(out, "--local") {
 			t.Fatal("help does not explain the agreed model before syntax", out)
 		}
 		if !reflect.DeepEqual(before, snapshot(t, cwd, filepath.Dir(configPath))) {
