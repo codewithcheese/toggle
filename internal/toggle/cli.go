@@ -11,74 +11,90 @@ import (
 	"strings"
 )
 
-const usage = `Toggle lets you add optional skills, agent instructions, configuration,
-and research files to a project when needed, then remove them when finished.
+const usage = `Toggle lets you bring skills, agent instructions, configuration, and
+research files into a project for a task, then remove them when you're done.
 
-Group files you want to add and remove together into a named feature.
-A store is a directory that holds these features. Each feature has a
-source/ directory containing the files to copy, arranged as they should
-appear in the project.
+For code reviews, for example, you could keep a review skill and its
+instructions together as a feature named review. Keep your features in
+a directory called a store. Turn review on to copy its files from the
+store into your project, then off to remove the project copies. The
+originals stay in the store for the next time you need them.
 
-Turning a feature on copies missing files into the project and leaves
-existing matching files in place. Their paths are added to Git's local
-exclude file, keeping them out of normal staging without changing .gitignore.
-Turning it off removes its project files only when all match the current
-source, then removes Toggle's exclusions for those paths.
-
-The source files stay in the store for reuse. Toggle does not save project
-edits back to the store. With stores outside the project, inactive source
-files stay out of ordinary project searches.
+The project copies are excluded from normal Git staging through Git's
+local exclude file. Your .gitignore stays unchanged.
 
 Usage:
   toggle list                     List features with stores and source paths.
-  toggle status                   Show matches ready for off and blockers.
+  toggle status                   Show features ready for removal and conflicts.
   toggle on <feature> [--store <name>] [--dry-run]
   toggle off <feature> [--store <name>] [--dry-run]
   toggle --help
 
-Run on/off, including previews, from the target Git repo root.
-Status works throughout that repo. List also works outside Git.
---dry-run validates and previews changes without writing.
-Status returns success for a completed scan, even with blockers.
+Run on/off, including previews, from your project's Git repo root.
+Status works anywhere within that repo. List also works outside Git.
+A completed status scan exits with code 0 even when it reports conflicts.
 
-Stores:
-  Configure named stores in ~/.config/toggle/config.json:
+Set up a store:
+  Create or edit ~/.config/toggle/config.json to name your store:
 
     {"stores":{"personal":"/absolute/path/to/features"}}
 
-  Store paths must be absolute. This config applies to every project.
+  Paths must be absolute. You can use an ordinary directory, a Git checkout,
+  or a worktree. Toggle reads the files as they are on disk; edits do not
+  need to be committed.
+
+  All configured stores are visible in every project. If a feature name
+  appears in several stores, use --store <name> to choose one.
   With no configured stores, toggle list is empty.
-  Use --store <name> when a feature name occurs in multiple stores.
-  Toggle reads current source files, including uncommitted changes.
 
-Feature layout:
-  <store-path>/<feature>/source/<project-relative files>
+  Keeping stores outside your project keeps inactive feature files out
+  of project searches. Configured stores inside a project also work.
 
-  Turning on review copies review/source/.agents/skills/review/SKILL.md
-  from the store to .agents/skills/review/SKILL.md in the project.
+Add a feature:
+  In the personal store above, arrange the review files like this:
 
-  A feature's name is its directory name; no manifest is needed.
-  Only source/ contents are copied.
+    /absolute/path/to/features/
+      review/
+        source/
+          .agents/skills/review/SKILL.md
+
+  The review directory names the feature. Files under source/ are copied
+  to the same paths in your project: this skill becomes
+  .agents/skills/review/SKILL.md. No manifest is needed, and files outside
+  source/ are not copied.
+
+Try it from your project's Git repo root:
+  toggle on review --store personal --dry-run
+  toggle on review --store personal
+  toggle status
+  toggle off review --store personal
+
+  --dry-run checks and shows the proposed changes without writing anything.
 
 Matching and protection:
-  Existing files at selected paths must match source contents and
-  executable bits. Off requires all selected files to match or all to
-  be absent; partial presence blocks off. Comparisons use current source
-  files, without installation history.
+  Existing project files must match the source contents and executable
+  permissions. On fills in missing files and leaves matching files in place.
+  Off removes the project copies only if all match the current source.
+  If all are already absent, off just clears their Toggle exclusions.
+  A mix of present and missing files, or any differing file, blocks off.
 
-  On/off validate before writing. A failure while applying changes can
-  leave partial results.
+  If you've edited project files, save any work you want to keep and resolve
+  differences with the store before using off. Toggle does not save edits
+  back to the store for you. If the store has changed since you copied a
+  feature, off compares your project files with that updated source.
 
-  Tracked destinations, .gitignore files, .git entries and descendants,
-  Git metadata, and configured feature directories are protected.
+  Feature files cannot be installed or removed at Git-tracked paths,
+  .gitignore files, .git entries and descendants, Git metadata, or configured
+  feature directories.
 
-Repo-specific features:
-  You can keep these in an external Git worktree of an orphan branch
-  with independent history. Configure its directory like any other store.
-  Manage worktrees, commits, and sharing with ordinary Git.
+  Commands check for conflicts before writing. An unexpected failure while
+  applying changes can leave partial results.
 
-Example:
-  toggle on review --store personal --dry-run
+Project-specific features:
+  For research or experiments tied to one project, you can keep a store
+  in an external Git worktree of an orphan branch. This gives the feature
+  files independent history in the same repository. Configure the worktree
+  directory like any other store; manage worktrees and sharing with Git.
 `
 
 type command struct {

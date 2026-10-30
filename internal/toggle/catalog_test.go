@@ -108,7 +108,7 @@ func TestListHelpAndSelectorArguments(t *testing.T) {
 	put(t, path, "invalid JSON", 0644)
 	a.cwd = t.TempDir()
 	out.Reset()
-	if code := a.run(context.Background(), []string{"--help"}); code != 0 || !strings.Contains(out.String(), "config.json") || !strings.Contains(out.String(), "source/<project-relative files>") {
+	if code := a.run(context.Background(), []string{"--help"}); code != 0 || !strings.Contains(out.String(), "config.json") || !strings.Contains(out.String(), ".agents/skills/review/SKILL.md") {
 		t.Fatal(code, out.String())
 	}
 	for _, args := range [][]string{{"on", "review", "--store", "team"}, {"off", "review", "--store", "local"}, {"on", "--store", "--label", "review"}} {

@@ -1,50 +1,84 @@
-# toggle
+Toggle lets you bring skills, agent instructions, configuration, and
+research files into a project for a task, then remove them when you're done.
 
-Make skills, agents, and configuration available in a repo when needed, then remove them when finished.
+For code reviews, for example, you could keep a review skill and its
+instructions together as a feature named review. Keep your features in
+a directory called a store. Turn review on to copy its files from the
+store into your project, then off to remove the project copies. The
+originals stay in the store for the next time you need them.
 
-A Go CLI that compares current repo files with a selected feature definition. Features live in named directory stores:
+The project copies are excluded from normal Git staging through Git's
+local exclude file. Your .gitignore stays unchanged.
 
-```text
-/path/to/feature-repo/
-  review/
-    README.md
-    source/
-      .agents/skills/review/SKILL.md
-```
+Usage:
+  toggle list                     List features with stores and source paths.
+  toggle status                   Show features ready for removal and conflicts.
+  toggle on <feature> [--store <name>] [--dry-run]
+  toggle off <feature> [--store <name>] [--dry-run]
+  toggle --help
 
-A feature's directory name is its name. Only its `source/` contents are installed, at the same repo-relative paths; top-level metadata stays in the definition. No manifest is needed.
+Run on/off, including previews, from your project's Git repo root.
+Status works anywhere within that repo. List also works outside Git.
+A completed status scan exits with code 0 even when it reports conflicts.
 
-Configure store directories in `~/.config/toggle/config.json`:
+Set up a store:
+  Create or edit ~/.config/toggle/config.json to name your store:
 
-```json
-{"stores":{"team":"/absolute/path/to/feature-repo"}}
-```
+    {"stores":{"personal":"/absolute/path/to/features"}}
 
-Toggle reads current source files, including modified and untracked files. Stores can be ordinary directories, checkouts, or worktrees; no source repository or commit is required. Missing config or an empty stores map gives an empty catalog.
+  Paths must be absolute. You can use an ordinary directory, a Git checkout,
+  or a worktree. Toggle reads the files as they are on disk; edits do not
+  need to be committed.
 
-For repo-specific research or experiments, you can use an external Git worktree of an orphan branch. This keeps inactive context out of project searches and gives it independent history in the same repository. Register its directory like any other store; manage worktrees, commits, and sharing with ordinary Git. Configured stores are visible across projects, so use descriptive names such as `project-research`. Configured in-project stores are also supported, with their feature definitions protected.
+  All configured stores are visible in every project. If a feature name
+  appears in several stores, use --store <name> to choose one.
+  With no configured stores, toggle list is empty.
 
-```sh
-toggle list
-toggle on review --store team --dry-run
-toggle on review --store team
-toggle status
-toggle off review --store team
-```
+  Keeping stores outside your project keeps inactive feature files out
+  of project searches. Configured stores inside a project also work.
 
-Bare feature names must be unique across configured stores; use `--store <name>` when a name is ambiguous. No store names are reserved.
+Add a feature:
+  In the personal store above, arrange the review files like this:
 
-On creates missing files and accepts matching files. Off requires every selected file to match, or every destination to be absent. Partial presence or differing content/executable mode is a conflict before changes. Tracked files and protected paths remain protected. `.gitignore` files, `.git` entries and descendants, Git metadata, and feature-definition directories cannot be installation targets.
+    /absolute/path/to/features/
+      review/
+        source/
+          .agents/skills/review/SKILL.md
 
-Matching is independent of earlier commands: there are no installation records, stored fingerprints, ownership transfers, or original-source off obligations. An agent can prepare a matching definition in a configured store and select it directly. Files get exact Git-local exclusions in one path-based block; successful off removes the matching files, empty parents, and selected exclusions. Unrelated files, user ignore rules, and directory symlinks are preserved.
+  The review directory names the feature. Files under source/ are copied
+  to the same paths in your project: this skill becomes
+  .agents/skills/review/SKILL.md. No manifest is needed, and files outside
+  source/ are not copied.
 
-Status identifies current definitions ready for off and blocked comparisons with existing paths, including edited single-file skills. It does not infer installation history or find every unknown setup. A completed scan succeeds even with blocked rows; config/source/scan errors fail.
+Try it from your project's Git repo root:
+  toggle on review --store personal --dry-run
+  toggle on review --store personal
+  toggle status
+  toggle off review --store personal
 
-Build with Go 1.27.2 or newer; Git is required at runtime:
+  --dry-run checks and shows the proposed changes without writing anything.
 
-```sh
-go build -o toggle ./cmd/toggle
-./toggle --help
-```
+Matching and protection:
+  Existing project files must match the source contents and executable
+  permissions. On fills in missing files and leaves matching files in place.
+  Off removes the project copies only if all match the current source.
+  If all are already absent, off just clears their Toggle exclusions.
+  A mix of present and missing files, or any differing file, blocks off.
 
-Read [commands](docs/commands.md), [creating features](docs/features.md), and [the file lifecycle](docs/lifecycle.md). JSON and JSONC files are copied whole.
+  If you've edited project files, save any work you want to keep and resolve
+  differences with the store before using off. Toggle does not save edits
+  back to the store for you. If the store has changed since you copied a
+  feature, off compares your project files with that updated source.
+
+  Feature files cannot be installed or removed at Git-tracked paths,
+  .gitignore files, .git entries and descendants, Git metadata, or configured
+  feature directories.
+
+  Commands check for conflicts before writing. An unexpected failure while
+  applying changes can leave partial results.
+
+Project-specific features:
+  For research or experiments tied to one project, you can keep a store
+  in an external Git worktree of an orphan branch. This gives the feature
+  files independent history in the same repository. Configure the worktree
+  directory like any other store; manage worktrees and sharing with Git.
