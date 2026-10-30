@@ -11,243 +11,191 @@ import (
 	"testing"
 )
 
-func runCLI(t *testing.T, cwd, global string, args ...string) (int, string, string) {
+func runConfigured(t *testing.T, cwd, configPath string, args ...string) (int, string, string) {
 	t.Helper()
-	var out, errOut bytes.Buffer
-	a := app{cwd: cwd, globalRoot: global, out: &out, errOut: &errOut}
+	var out, diagnostics bytes.Buffer
+	a := app{cwd: cwd, configPath: configPath, out: &out, errOut: &diagnostics}
 	code := a.run(context.Background(), args)
-	return code, out.String(), errOut.String()
+	return code, out.String(), diagnostics.String()
 }
 
-func TestCommandRootGuards(t *testing.T) {
+// The store root is fixture data, never an implicit global store.
+func runCLI(t *testing.T, cwd, storeRoot string, args ...string) (int, string, string) {
+	t.Helper()
+	stores := map[string]string{}
+	if storeRoot != "" {
+		stores["team"] = storeRoot
+	}
+	return runConfigured(t, cwd, testConfig(t, stores), args...)
+}
+
+func legacyPath(r *repo) string { return filepath.Join(r.gitDir, "toggle.json") }
+
+func TestCommandRootGuardsAndReadOnlyPreviews(t *testing.T) {
 	r := testRepo(t)
-	global := t.TempDir()
-	testFeature(t, global, "review", "instructions.md", "source")
-	sub := filepath.Join(r.root, "docs")
+	store := t.TempDir()
+	f := testFeature(t, store, "review", ".agents/skills/review/SKILL.md", "skill")
+	sub, outside := filepath.Join(r.root, "docs"), t.TempDir()
 	os.Mkdir(sub, 0755)
-	outside := t.TempDir()
 	for _, cwd := range []string{sub, outside} {
 		for _, args := range [][]string{{"on", "review"}, {"off", "review"}, {"on", "review", "--dry-run"}, {"off", "review", "--dry-run"}} {
-			before := snapshot(t, r.root, global, outside)
-			code, _, diagnostics := runCLI(t, cwd, global, args...)
+			before := snapshot(t, r.root, store, outside)
+			code, _, diagnostics := runCLI(t, cwd, store, args...)
 			if code == 0 || !strings.Contains(diagnostics, "repo root") {
-				t.Fatalf("accepted %v in %s: %d %s", args, cwd, code, diagnostics)
+				t.Fatal(code, diagnostics)
 			}
-			if !reflect.DeepEqual(before, snapshot(t, r.root, global, outside)) {
-				t.Fatal("rejected command changed files")
+			if !reflect.DeepEqual(before, snapshot(t, r.root, store, outside)) {
+				t.Fatal("root rejection changed files")
 			}
 		}
 	}
-}
-
-func TestPreviewsAndConflicts(t *testing.T) {
-	r := testRepo(t)
-	global := t.TempDir()
-	f := testFeature(t, global, "review", "instructions.md", "source instructions")
-	before := snapshot(t, r.root, global)
-	code, out, diagnostics := runCLI(t, r.root, global, "on", "review", "--dry-run")
-	if code != 0 || !strings.Contains(out, "instructions.md") || !strings.Contains(out, "exclusion") {
-		t.Fatal(code, out, diagnostics)
+	before := snapshot(t, r.root, store)
+	code, output, diagnostics := runCLI(t, r.root, store, "on", "review", "--store", "team", "--dry-run")
+	if code != 0 || !strings.Contains(output, "install") || !strings.Contains(output, "add exclusion") {
+		t.Fatal(code, output, diagnostics)
 	}
-	if !reflect.DeepEqual(before, snapshot(t, r.root, global)) {
-		t.Fatal("preview wrote files")
+	if !reflect.DeepEqual(before, snapshot(t, r.root, store)) {
+		t.Fatal("on preview changed files")
 	}
-	put(t, filepath.Join(r.root, "instructions.md"), "existing instructions", 0644)
-	before = snapshot(t, r.root, global)
-	realCode, _, realErr := runCLI(t, r.root, global, "on", "review")
-	previewCode, _, previewErr := runCLI(t, r.root, global, "on", "review", "--dry-run")
-	if realCode == 0 || previewCode != realCode || previewErr != realErr || !strings.Contains(realErr, filepath.Join(f.dir, "source/instructions.md")) {
-		t.Fatal(realCode, realErr, previewCode, previewErr)
-	}
-	for _, text := range []string{"existing instructions", "source instructions", "---", "+++"} {
-		if strings.Contains(realErr, text) {
-			t.Fatal("generated content/diff in diagnostics", realErr)
-		}
-	}
-	if !reflect.DeepEqual(before, snapshot(t, r.root, global)) {
-		t.Fatal("conflict changed files")
-	}
-	os.Remove(filepath.Join(r.root, "instructions.md"))
 	applyFeature(t, r, f, "on")
-	put(t, filepath.Join(r.root, "instructions.md"), "saved edit", 0755)
-	put(t, filepath.Join(f.dir, "source/instructions.md"), "saved edit", 0755)
-	before = snapshot(t, r.root, global)
-	code, out, diagnostics = runCLI(t, r.root, global, "off", "review", "--dry-run")
-	if code != 0 || !strings.Contains(out, "remove\tinstructions.md") || !strings.Contains(out, "remove exclusion") {
-		t.Fatal(code, out, diagnostics)
+	before = snapshot(t, r.root, store)
+	code, output, diagnostics = runCLI(t, r.root, store, "off", "review", "--store", "team", "--dry-run")
+	if code != 0 || !strings.Contains(output, "remove empty directory\t.agents") {
+		t.Fatal(code, output, diagnostics)
 	}
-	if !reflect.DeepEqual(before, snapshot(t, r.root, global)) {
+	if !reflect.DeepEqual(before, snapshot(t, r.root, store)) {
 		t.Fatal("off preview changed files")
 	}
+	put(t, filepath.Join(r.root, ".agents/skills/review/SKILL.md"), "edited file", 0755)
+	before = snapshot(t, r.root, store)
+	realCode, _, realError := runCLI(t, r.root, store, "off", "review", "--store", "team")
+	previewCode, _, previewError := runCLI(t, r.root, store, "off", "review", "--store", "team", "--dry-run")
+	if realCode == 0 || previewCode != realCode || realError != previewError || !strings.Contains(realError, f.dir) {
+		t.Fatal(realCode, realError, previewCode, previewError)
+	}
+	if strings.Contains(realError, "edited file") || strings.Contains(realError, "---") || strings.Contains(realError, "+++") {
+		t.Fatal("generated content diff", realError)
+	}
+	if !reflect.DeepEqual(before, snapshot(t, r.root, store)) {
+		t.Fatal("conflicting commands changed files")
+	}
 }
 
-func TestStatusClassificationsAndLocations(t *testing.T) {
-	for _, kind := range []string{"off", "on", "edit", "preserved", "missing-file", "missing-definition", "tracked-edit", "source-drift", "redirected", "blocked-on"} {
+func TestStatusCandidateComparisons(t *testing.T) {
+	for _, kind := range []string{"absent", "complete", "partial", "different", "mode", "tracked", "directory", "zero-matching-partial", "path-blocker"} {
 		t.Run(kind, func(t *testing.T) {
 			r := testRepo(t)
-			global := t.TempDir()
-			f := testFeature(t, global, "review", "instructions.md", "source")
-			target := filepath.Join(r.root, "instructions.md")
-			if kind != "off" && kind != "blocked-on" {
-				applyFeature(t, r, f, "on")
+			store := t.TempDir()
+			f := testFeature(t, store, "review", "instructions.md", "source")
+			path := filepath.Join(r.root, "instructions.md")
+			if kind != "absent" {
+				put(t, path, "source", 0644)
 			}
-			want := "on"
 			switch kind {
-			case "off":
-				want = "off"
-			case "edit", "preserved", "tracked-edit", "blocked-on":
-				put(t, target, "edited", 0755)
-				want = "conflicted"
-				if kind == "preserved" || kind == "tracked-edit" {
-					put(t, filepath.Join(f.dir, "source/instructions.md"), "edited", 0755)
+			case "partial", "zero-matching-partial":
+				put(t, filepath.Join(f.dir, "source/missing.md"), "missing", 0644)
+				if kind == "zero-matching-partial" {
+					put(t, path, "edited", 0644)
 				}
-				if kind == "preserved" {
-					want = "modified"
-				}
-				if kind == "tracked-edit" {
-					testGit(t, r.root, "add", "-f", "instructions.md")
-				}
-			case "missing-file":
-				os.Remove(target)
-				want = "modified"
-			case "missing-definition":
-				os.RemoveAll(f.dir)
-				want = "conflicted"
-			case "source-drift":
-				put(t, filepath.Join(f.dir, "source/instructions.md"), "new global", 0644)
-			case "redirected":
-				os.Rename(target, filepath.Join(r.root, "old.md"))
-				os.Symlink("other.md", target)
-				want = "conflicted"
+			case "different":
+				put(t, path, "edited", 0644)
+			case "mode":
+				os.Chmod(path, 0755)
+			case "tracked":
+				testGit(t, r.root, "add", "instructions.md")
+			case "directory":
+				os.Remove(path)
+				os.Mkdir(path, 0755)
+			case "path-blocker":
+				put(t, filepath.Join(f.dir, "source/.git/config"), "reserved", 0644)
 			}
 			sub := filepath.Join(r.root, "docs")
 			os.Mkdir(sub, 0755)
-			before := snapshot(t, r.root, global)
-			code, output, diagnostics := runCLI(t, r.root, global, "status")
-			if code != 0 || !strings.Contains(output, "review\t"+want+"\n") && !strings.Contains(output, "review\t"+want+"\t") {
-				t.Fatal(kind, code, output, diagnostics)
+			before := snapshot(t, r.root, store)
+			code, out, diagnostics := runCLI(t, r.root, store, "status")
+			if code != 0 {
+				t.Fatal("blocked comparison failed scan", code, out, diagnostics)
 			}
-			if want == "conflicted" && !strings.Contains(output, "blocked") {
-				t.Fatal("missing blocked transition", output)
+			want := "blocked"
+			if kind == "complete" {
+				want = "ready for off"
 			}
-			subCode, subOutput, subErr := runCLI(t, sub, global, "status")
-			if subCode != code || subOutput != output || subErr != diagnostics {
-				t.Fatal("subdirectory status differs", subCode, subOutput, subErr)
+			if kind == "absent" {
+				if strings.Contains(out, "review\t") || !strings.Contains(out, "other setup may be active") {
+					t.Fatal("absent definition reported as candidate", out)
+				}
+			} else if !strings.Contains(out, "review\t--store team\t"+want) || !strings.Contains(out, f.dir) {
+				t.Fatal(kind, out)
 			}
-			if !reflect.DeepEqual(before, snapshot(t, r.root, global)) {
+			if kind == "different" || kind == "zero-matching-partial" {
+				if !strings.Contains(out, "0 matching") || !strings.Contains(out, "1 different") {
+					t.Fatal("zero-match conflict hidden", out)
+				}
+			}
+			if subCode, subOut, subError := runCLI(t, sub, store, "status"); subCode != code || subOut != out || subError != diagnostics {
+				t.Fatal("status changed with working directory", subCode, subOut, subError)
+			}
+			if !reflect.DeepEqual(before, snapshot(t, r.root, store)) {
 				t.Fatal("status changed files")
 			}
 		})
 	}
-	outside := t.TempDir()
-	global := t.TempDir()
-	testFeature(t, global, "review", "instructions.md", "source")
-	before := snapshot(t, outside, global)
-	code, _, diagnostics := runCLI(t, outside, global, "status")
-	if code == 0 || !strings.Contains(diagnostics, "requires a Git repo") || !reflect.DeepEqual(before, snapshot(t, outside, global)) {
+}
+
+func TestStatusSeparatesScanErrorsAndDuplicateDefinitions(t *testing.T) {
+	r := testRepo(t)
+	a, b := t.TempDir(), t.TempDir()
+	testFeature(t, a, "review", "instructions.md", "source")
+	testFeature(t, b, "review", "instructions.md", "source")
+	put(t, filepath.Join(r.root, "instructions.md"), "source", 0644)
+	path := testConfig(t, map[string]string{"personal": a, "team": b})
+	code, out, diagnostics := runConfigured(t, r.root, path, "status")
+	if code != 0 || strings.Count(out, "ready for off") != 2 || !strings.Contains(out, "--store personal") || !strings.Contains(out, "--store team") {
+		t.Fatal(code, out, diagnostics)
+	}
+	put(t, path, "invalid JSON", 0644)
+	if code, _, diagnostics := runConfigured(t, r.root, path, "status"); code == 0 || !strings.Contains(diagnostics, path) {
+		t.Fatal("invalid config scan succeeded", code, diagnostics)
+	}
+	path = testConfig(t, map[string]string{"missing": filepath.Join(t.TempDir(), "missing")})
+	if code, _, diagnostics := runConfigured(t, r.root, path, "status"); code == 0 || !strings.Contains(diagnostics, "missing") {
+		t.Fatal("unavailable source scan succeeded", code, diagnostics)
+	}
+	if code, _, diagnostics := runConfigured(t, t.TempDir(), path, "status"); code == 0 || !strings.Contains(diagnostics, "requires a Git repo") {
 		t.Fatal(code, diagnostics)
 	}
 }
 
-func TestCLIReportsPartialEffects(t *testing.T) {
-	r := testRepo(t)
-	global := t.TempDir()
-	testFeature(t, global, "review", "instructions.md", "source")
-	var out, errOut bytes.Buffer
-	ops := defaultOps()
-	ops.write = func(path string, data []byte, mode os.FileMode) error { return errors.New("injected write failure") }
-	a := app{cwd: r.root, globalRoot: global, out: &out, errOut: &errOut, ops: &ops}
-	if code := a.run(context.Background(), []string{"on", "review"}); code == 0 || !strings.Contains(errOut.String(), "Completed effects:") || !strings.Contains(errOut.String(), "instructions.md") || out.Len() != 0 {
-		t.Fatal(code, &out, &errOut)
-	}
-}
-
-func TestStatusUsesCurrentRepo(t *testing.T) {
+func TestStatusUsesFreshCurrentRepo(t *testing.T) {
 	a, b := testRepo(t), testRepo(t)
-	global := t.TempDir()
-	f := testFeature(t, global, "review", "instructions.md", "source")
-	applyFeature(t, a, f, "on")
-	before := snapshot(t, a.root, b.root, global)
-	for _, test := range []struct{ dir, label string }{{a.root, "on"}, {b.root, "off"}} {
-		code, out, diagnostics := runCLI(t, test.dir, global, "status")
-		if code != 0 || out != "review\t"+test.label+"\n" {
-			t.Fatal(code, out, diagnostics)
-		}
+	store := t.TempDir()
+	testFeature(t, store, "review", "instructions.md", "source")
+	put(t, filepath.Join(a.root, "instructions.md"), "source", 0644)
+	path := testConfig(t, map[string]string{"team": store})
+	_, out, _ := runConfigured(t, a.root, path, "status")
+	if !strings.Contains(out, "ready for off") {
+		t.Fatal(out)
 	}
-	if !reflect.DeepEqual(before, snapshot(t, a.root, b.root, global)) {
-		t.Fatal("cross-repo status changed files")
+	_, out, _ = runConfigured(t, b.root, path, "status")
+	if strings.Contains(out, "review\t") {
+		t.Fatal("history leaked across repos", out)
+	}
+	put(t, filepath.Join(a.root, "instructions.md"), "edited", 0644)
+	_, out, _ = runConfigured(t, a.root, path, "status")
+	if !strings.Contains(out, "blocked") || strings.Contains(out, "ready for off") {
+		t.Fatal("status reused old cache", out)
 	}
 }
 
-func TestAllConflictsBlockEveryTarget(t *testing.T) {
+func TestCLIPartialFailureHasNoRecordLocations(t *testing.T) {
 	r := testRepo(t)
-	global := t.TempDir()
-	f := testFeature(t, global, "review", "absent.md", "new file")
-	put(t, filepath.Join(f.dir, "source/conflicting.md"), "proposed", 0644)
-	put(t, filepath.Join(r.root, "conflicting.md"), "existing edit", 0644)
-	before := snapshot(t, r.root, global)
-	for _, args := range [][]string{{"on", "review"}, {"on", "review", "--dry-run"}} {
-		code, _, diagnostics := runCLI(t, r.root, global, args...)
-		if code == 0 || !strings.Contains(diagnostics, "conflicting.md") {
-			t.Fatal(code, diagnostics)
-		}
-		assertAbsent(t, filepath.Join(r.root, "absent.md"))
-		if !reflect.DeepEqual(before, snapshot(t, r.root, global)) {
-			t.Fatal("conflict allowed part of the operation to apply")
-		}
-	}
-}
-
-func TestSeparateGitDirectoryCLI(t *testing.T) {
-	dir := t.TempDir()
-	metadata := filepath.Join(t.TempDir(), "gitdata")
-	testGit(t, dir, "init", "-q", "--separate-git-dir", metadata)
-	global := t.TempDir()
-	testFeature(t, global, "review", "instructions.md", "source")
-	pointer := mustRead(t, filepath.Join(dir, ".git"))
-	code, _, diagnostics := runCLI(t, dir, global, "on", "review")
-	if code != 0 {
-		t.Fatal(code, diagnostics)
-	}
-	if mustRead(t, filepath.Join(dir, ".git")) != pointer {
-		t.Fatal("Git pointer file changed")
-	}
-	state, _, err := loadRecords(filepath.Join(metadata, "toggle.json"))
-	if err != nil || len(state.Features) != 1 {
-		t.Fatal(state, err)
-	}
-	if !strings.Contains(mustRead(t, filepath.Join(metadata, "info/exclude")), "/instructions.md") {
-		t.Fatal("exclusion not in separate Git directory")
-	}
-	testGit(t, dir, "check-ignore", "-q", "instructions.md")
-}
-
-func TestOffAfterDirectorySymlinkRetargeting(t *testing.T) {
-	r := testRepo(t)
-	global := t.TempDir()
-	relative := ".agents/skills/review/SKILL.md"
-	f := testFeature(t, global, "review", relative, "installed skill")
-	if err := os.Mkdir(filepath.Join(r.root, ".agents"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	alias := filepath.Join(r.root, ".agents/skills")
-	if err := os.Symlink("../.local-skills", alias); err != nil {
-		t.Fatal(err)
-	}
-	applyFeature(t, r, f, "on")
-	if err := os.Remove(alias); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("../.other-skills", alias); err != nil {
-		t.Fatal(err)
-	}
-	put(t, filepath.Join(r.root, ".other-skills/review/SKILL.md"), "unrelated skill", 0644)
-	before := snapshot(t, r.root, global)
-	code, _, diagnostics := runCLI(t, r.root, global, "off", "review")
-	if code == 0 || !strings.Contains(diagnostics, "recorded") || !strings.Contains(diagnostics, "current") {
-		t.Fatal(code, diagnostics)
-	}
-	if !reflect.DeepEqual(before, snapshot(t, r.root, global)) {
-		t.Fatal("retargeted directory alias allowed files to change")
+	store := t.TempDir()
+	testFeature(t, store, "review", "instructions.md", "source")
+	var out, diagnostics bytes.Buffer
+	ops := defaultOps()
+	ops.write = func(string, []byte, os.FileMode) error { return errors.New("injected copy failure") }
+	a := app{cwd: r.root, configPath: testConfig(t, map[string]string{"team": store}), out: &out, errOut: &diagnostics, ops: &ops}
+	if code := a.run(context.Background(), []string{"on", "review", "--store", "team"}); code == 0 || !strings.Contains(diagnostics.String(), "Completed effects:") || !strings.Contains(diagnostics.String(), "instructions.md") || strings.Contains(diagnostics.String(), "bookkeeping") || out.Len() != 0 {
+		t.Fatal(code, out.String(), diagnostics.String())
 	}
 }

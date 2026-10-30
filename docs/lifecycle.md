@@ -1,36 +1,44 @@
-# Turning features on and off
+# Applying and removing current definitions
 
-Run on/off at the Git repo root:
+Run on/off and previews at the Git repo root. A bare feature name must be unique; otherwise select explicitly:
 
 ```sh
-toggle on review --dry-run
-toggle on review
-toggle status
-toggle off review --dry-run
-toggle off review
+toggle on review --store team --dry-run
+toggle on review --store team
+toggle off review --store team --dry-run
+toggle off review --store team
 ```
 
-On checks the entire operation before adding exact local exclusions, saving installation bookkeeping, and copying source files. A matching untracked file can be accepted without prompting; it then belongs to the installation and normal off removes it. A tracked file conflicts even if identical. A file installed for another feature also conflicts even if identical.
+Toggle compares the current definition with current repo files. A match includes file bytes and executable bits. There is no installation record, stored baseline, exclusive ownership, or obligation to turn off an original source.
 
-Off uses recorded installed paths. Unchanged files can be removed even when the source has changed. Already absent files need no removal. New files added to the source since on are not removal targets. Unrelated files are preserved, including other skills in the same directory. Destination symlinks are retained while their resolved files are installed or removed. A changed destination mapping blocks off.
+| Repo files | On | Off |
+|---|---|---|
+| Every selected destination absent | Copy the definition | Already off; remove stale selected managed exclusions, if any |
+| Every selected destination matches | Accept the files and ensure exclusions | Remove the files and selected exclusions |
+| Matching files mixed with absence | Fill missing files | Conflict before changes |
+| Any differing content/mode or incompatible type | Conflict before changes | Conflict before changes |
 
-Repeating on while installed or off while already off succeeds without changes. Repeated on does not refresh definitions, switch to a new local override, restore a missing file, or overwrite edits. To install a changed definition, resolve edits, turn the feature off, then on again.
+Git-tracked files, unsafe paths, and protected source definitions conflict even when contents match. Known conflicts stop the whole operation before persistent changes. Previews use the same checks and write nothing.
 
-## Preserve edits explicitly
+## Local forks and edits
 
-If installed content or executable bits have changed since on, off requires them to match the same relative path in the currently selected source. Choose where to preserve them yourself:
+An agent can prepare `.toggle/review/source/` containing the desired current files and executable modes. It can then select that definition directly:
 
-- Update the global source when the change should be shared, provided no local override is selected.
-- Create or update `.toggle/<name>/source/` when the change should stay with this repo. A local feature replaces the global definition of that name; it is not an overlay. Include the files you want the local feature to install.
+```sh
+toggle on review --local
+toggle off review --local
+```
 
-For example, after editing `.agents/skills/review/SKILL.md`, save the same bytes and executable mode to `.toggle/review/source/.agents/skills/review/SKILL.md`. Off can then remove the installed copy, and the next on installs the local source. The repo owner chooses whether to commit or ignore `.toggle/`.
+No off against the original store, ownership transfer, force mode, or automatic save step is involved. A differing repo file must be reconciled explicitly with the selected source first. Toggle reports paths and reasons, not generated diffs, and never changes the source definition.
 
-Toggle does not save an edit cache, update source definitions, or generate diffs. It reports the feature, conflicting path, and reason so an agent or human can use their own comparison tools. If no global or local definition remains, cleanup is manual.
+Store updates are current differences too. A repo file copied from an earlier source version can conflict with the current version even if nobody edited the repo copy. Deleted or renamed source paths and previous symlink destinations are not remembered; an agent uses ordinary files and Git history to reconcile leftovers.
 
-## Validation conflicts and write failures
+Different definitions can match the same files. Off through either removes those matching paths; the other definition has no independent installed state. A complete matching untracked setup can be removed even when toggle never created it.
 
-Known conflicts stop the whole operation before persistent changes. A preview uses the same checks and changes nothing.
+## Directory cleanup and failures
 
-Unexpected write failures can leave partial effects. On establishes exclusions and bookkeeping before writing files; off removes files before exclusions and bookkeeping. After a failure, later writes stop and completed effects stay in place. The failed write itself may also have partial effects.
+After a complete-match off removes files, empty parent directories are pruned deepest first. Cleanup retains unrelated entries, the repo root, directory symlink entries, and their directory targets. Sources and their metadata stay outside installation.
 
-The error reports completed effects, the failed path, remaining effects, and bookkeeping/exclusion locations. Inspect those paths and clean up manually. There is no automatic rollback or repair command, and repeated on is not a retry mechanism.
+Unexpected I/O failures stop further writes and may leave partial effects. On establishes exclusions before file creation. Off removes files and empty parents before subtracting exclusions. Diagnostics report completed effects, the failed path, remaining effects, and the exclusion-file location. The failed write itself may also have partial effects; no rollback is promised.
+
+A subsequent off on partial presence conflicts until the agent reconciles it. Ordinary on can complete still-missing files when present ones match, but a partial differing write remains a conflict. Repeating either operation with stable matching/absent inputs and correct exclusions makes no changes.

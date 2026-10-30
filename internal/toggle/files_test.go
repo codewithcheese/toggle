@@ -15,7 +15,7 @@ func TestSourceTreeAndDestinations(t *testing.T) {
 	f := testFeature(t, t.TempDir(), "review", ".agents/skills/review/SKILL.md", "skill")
 	put(t, filepath.Join(f.dir, "README.md"), "metadata", 0644)
 	put(t, filepath.Join(f.dir, "source", "run.sh"), "echo hi", 0751)
-	files, err := sourceFiles(f)
+	files, err := sourceEntries(f)
 	if err != nil || len(files) != 2 {
 		t.Fatalf("sources: %v %v", files, err)
 	}
@@ -41,7 +41,7 @@ func TestSourceTreeAndDestinations(t *testing.T) {
 		t.Fatal(resolved, err)
 	}
 	os.Symlink(filepath.Join(t.TempDir(), "outside.md"), filepath.Join(f.dir, "source", "escape"))
-	if _, err := sourceFiles(f); err == nil {
+	if _, err := sourceEntries(f); err == nil {
 		t.Fatal("accepted source escape")
 	}
 }
@@ -49,12 +49,12 @@ func TestSourceTreeAndDestinations(t *testing.T) {
 func TestInternalSourceSymlinks(t *testing.T) {
 	f := testFeature(t, t.TempDir(), "review", "original.md", "skill")
 	os.Symlink("original.md", filepath.Join(f.dir, "source", "alias.md"))
-	files, err := sourceFiles(f)
+	files, err := sourceEntries(f)
 	if err != nil || len(files) != 2 {
 		t.Fatal(files, err)
 	}
 	os.Symlink(".", filepath.Join(f.dir, "source", "cycle"))
-	if _, err := sourceFiles(f); err == nil {
+	if _, err := sourceEntries(f); err == nil {
 		t.Fatal("accepted cycle")
 	}
 }

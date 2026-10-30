@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // File operations are injectable so failure tests can exercise real partial
@@ -15,10 +16,11 @@ type fileOps struct {
 	metadata func(string, []byte) error
 	write    func(string, []byte, os.FileMode) error
 	remove   func(string) error
+	rmdir    func(string) error
 }
 
 func defaultOps() fileOps {
-	return fileOps{metadata: atomicWrite, write: writeInstalled, remove: os.Remove}
+	return fileOps{metadata: atomicWrite, write: writeInstalled, remove: os.Remove, rmdir: syscall.Rmdir}
 }
 
 func writeInstalled(path string, data []byte, mode os.FileMode) error {
@@ -40,19 +42,22 @@ func writeInstalled(path string, data []byte, mode os.FileMode) error {
 	return f.Close()
 }
 
-func (p *plan) recheckFile(ctx context.Context, change fileChange) error {
+func (p *plan) recheckFile(ctx context.Context, change fileChange, view *comparisonView) error {
 	resolved, err := p.repo.destination(change.file.Declared)
 	if err != nil {
 		return err
 	}
 	want := filepath.Join(p.repo.root, change.file.Resolved)
 	if resolved != want {
-		return fmt.Errorf("destination redirected: %s; recorded %s; current %s", change.file.Declared, want, resolved)
+		return fmt.Errorf("destination redirected: %s; planned %s; current %s", change.file.Declared, want, resolved)
 	}
-	tracked, err := p.repo.tracked(ctx, filepath.Join(p.repo.root, change.file.Declared), resolved)
-	if err != nil {
+	if err := checkDefinitionBoundary(p.repo, change.file.Declared, resolved, p.protected); err != nil {
 		return err
 	}
+	if err := view.refreshIndex(ctx); err != nil {
+		return err
+	}
+	tracked := view.trackedPath(filepath.Join(p.repo.root, change.file.Declared), resolved)
 	if tracked != "" {
 		return fmt.Errorf("tracked by Git: %s", tracked)
 	}
@@ -63,7 +68,7 @@ func (p *plan) recheckFile(ctx context.Context, change fileChange) error {
 	if !current.matches(change.before) {
 		return fmt.Errorf("file changed after preparation: %s", resolved)
 	}
-	if change.source != "" {
+	if change.source != "" && !(p.action == "off" && change.before.missing) {
 		resolvedSource, err := resolvePath(change.source)
 		if err != nil {
 			return err
@@ -82,30 +87,31 @@ func (p *plan) recheckFile(ctx context.Context, change fileChange) error {
 	return nil
 }
 
-func (p *plan) recheck(ctx context.Context) error {
-	for _, item := range []struct {
-		path string
-		old  []byte
-	}{{p.repo.recordPath, p.oldRecord}, {p.repo.excludePath, p.oldExclude}} {
-		current, err := readOptional(item.path)
-		if err != nil {
-			return err
-		}
-		if !bytes.Equal(current, item.old) {
-			return fmt.Errorf("metadata changed after preparation: %s", item.path)
+func (p *plan) recheck(ctx context.Context) (*comparisonView, error) {
+	view, err := newView(ctx, p.repo)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(view.exclusion, p.oldExclude) {
+		return nil, fmt.Errorf("exclusions changed after preparation: %s", p.repo.excludePath)
+	}
+	fresh, err := prepareDefinition(ctx, p.repo, p.action, p.definition, p.protected, view, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := fresh.err(); err != nil {
+		return nil, err
+	}
+	if len(p.changes) != len(fresh.changes) {
+		return nil, fmt.Errorf("source file list changed after preparation: %s", p.definition.dir)
+	}
+	for i, change := range p.changes {
+		other := fresh.changes[i]
+		if change.file != other.file || change.sourceRoot != other.sourceRoot || !change.before.matches(other.before) || !change.desired.matches(other.desired) {
+			return nil, fmt.Errorf("file or source changed after preparation: %s", change.file.Declared)
 		}
 	}
-	for _, change := range p.changes {
-		if err := p.recheckFile(ctx, change); err != nil {
-			return err
-		}
-		if p.action == "on" {
-			if err := p.repo.exclusionAllowed(ctx, change.file.Resolved); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return view, nil
 }
 
 type effect struct {
@@ -114,14 +120,14 @@ type effect struct {
 }
 
 type applicationError struct {
-	feature, failed, path, records, excludes string
-	cause                                    error
-	completed, remaining                     []string
+	feature, failed, path, excludes string
+	cause                           error
+	completed, remaining            []string
 }
 
 func (e *applicationError) Error() string {
-	return fmt.Sprintf("%s: application failed: %s: %s: %v\nCompleted effects: %s\nFailed effect may have partial effects: %s\nRemaining effects: %s\nInspect bookkeeping: %s\nInspect exclusions: %s\nCompleted effects remain; manual cleanup may be required.",
-		e.feature, e.failed, e.path, e.cause, effectsText(e.completed), e.failed, effectsText(e.remaining), e.records, e.excludes)
+	return fmt.Sprintf("%s: application failed: %s: %s: %v\nCompleted effects: %s\nFailed effect may have partial effects: %s\nRemaining effects: %s\nInspect exclusions: %s\nCompleted effects remain; manual cleanup may be required.",
+		e.feature, e.failed, e.path, e.cause, effectsText(e.completed), e.failed, effectsText(e.remaining), e.excludes)
 }
 
 func effectsText(items []string) string {
@@ -138,14 +144,14 @@ func (p *plan) apply(ctx context.Context, ops fileOps) error {
 	if p.noop {
 		return nil
 	}
-	if err := p.recheck(ctx); err != nil {
+	view, err := p.recheck(ctx)
+	if err != nil {
 		return fmt.Errorf("%s: %w", p.name, err)
 	}
 	var effects []effect
 	exclusion := effect{label: "update exclusions", path: p.repo.excludePath, run: func() error { return ops.metadata(p.repo.excludePath, p.newExclude) }}
-	record := effect{label: "save bookkeeping", path: p.repo.recordPath, run: func() error { return ops.metadata(p.repo.recordPath, p.newRecord) }}
-	if p.action == "on" {
-		effects = append(effects, exclusion, record)
+	if p.action == "on" && !bytes.Equal(p.oldExclude, p.newExclude) {
+		effects = append(effects, exclusion)
 	}
 	for _, change := range p.changes {
 		if p.action == "on" && !change.before.missing || p.action == "off" && change.before.missing {
@@ -157,7 +163,7 @@ func (p *plan) apply(ctx context.Context, ops fileOps) error {
 			label = "remove " + change.file.Declared
 		}
 		effects = append(effects, effect{label: label, path: path, run: func() error {
-			if err := p.recheckFile(ctx, change); err != nil {
+			if err := p.recheckFile(ctx, change, view); err != nil {
 				return err
 			}
 			if p.action == "off" {
@@ -167,7 +173,14 @@ func (p *plan) apply(ctx context.Context, ops fileOps) error {
 		}})
 	}
 	if p.action == "off" {
-		effects = append(effects, exclusion, record)
+		for _, dir := range p.directories {
+			effects = append(effects, effect{label: "prune empty directory " + dir, path: dir, run: func() error {
+				return removeEmptyDirectory(p.repo.root, dir, ops.rmdir)
+			}})
+		}
+		if !bytes.Equal(p.oldExclude, p.newExclude) {
+			effects = append(effects, exclusion)
+		}
 	}
 	var completed []string
 	for i, effect := range effects {
@@ -176,7 +189,7 @@ func (p *plan) apply(ctx context.Context, ops fileOps) error {
 			for _, pending := range effects[i+1:] {
 				remaining = append(remaining, pending.label+" ("+pending.path+")")
 			}
-			return &applicationError{feature: p.name, failed: effect.label, path: effect.path, cause: err, completed: completed, remaining: remaining, records: p.repo.recordPath, excludes: p.repo.excludePath}
+			return &applicationError{feature: p.name, failed: effect.label, path: effect.path, cause: err, completed: completed, remaining: remaining, excludes: p.repo.excludePath}
 		}
 		completed = append(completed, effect.label+" ("+effect.path+")")
 	}

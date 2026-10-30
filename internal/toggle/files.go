@@ -14,6 +14,8 @@ type content struct {
 	hash    string
 	exec    uint32
 	missing bool
+	size    int64
+	invalid bool
 }
 
 func readContent(path string) (content, error) {
@@ -25,17 +27,21 @@ func readContent(path string) (content, error) {
 		return content{}, err
 	}
 	if !info.Mode().IsRegular() {
-		return content{}, fmt.Errorf("not an ordinary file: %s", path)
+		return content{invalid: true}, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return content{}, err
 	}
-	return content{data: data, hash: fmt.Sprintf("%x", sha256.Sum256(data)), exec: uint32(info.Mode().Perm() & 0111)}, nil
+	return fingerprint(data, info), nil
+}
+
+func fingerprint(data []byte, info os.FileInfo) content {
+	return content{data: data, hash: fmt.Sprintf("%x", sha256.Sum256(data)), exec: uint32(info.Mode().Perm() & 0111), size: info.Size()}
 }
 
 func (c content) matches(other content) bool {
-	return c.missing == other.missing && c.hash == other.hash && c.exec == other.exec
+	return !c.invalid && !other.invalid && c.missing == other.missing && c.hash == other.hash && c.exec == other.exec
 }
 
 // resolvePath follows existing symlinks, including dangling final symlinks,
@@ -192,10 +198,12 @@ func (r *repo) reservedName(name, reserved string) bool {
 
 type sourceFile struct {
 	relative, path string
+	resolved, root string
 	content        content
 }
 
-func sourceFiles(f feature) ([]sourceFile, error) {
+// sourceEntries enumerates and validates paths without reading file contents.
+func sourceEntries(f feature) ([]sourceFile, error) {
 	root, err := resolvePath(filepath.Join(f.dir, "source"))
 	if err != nil {
 		return nil, err
@@ -233,11 +241,10 @@ func sourceFiles(f feature) ([]sourceFile, error) {
 			}
 			return nil
 		}
-		c, err := readContent(resolved)
-		if err != nil {
-			return err
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("source is not an ordinary file: %s", path)
 		}
-		files = append(files, sourceFile{relative: relative, path: path, content: c})
+		files = append(files, sourceFile{relative: relative, path: path, resolved: resolved, root: root, content: content{exec: uint32(info.Mode().Perm() & 0111), size: info.Size()}})
 		return nil
 	}
 	err = walk("")

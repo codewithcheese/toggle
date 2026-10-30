@@ -8,7 +8,7 @@ func TestParse(t *testing.T) {
 			t.Errorf("%v: %v", args, err)
 		}
 	}
-	for _, args := range [][]string{nil, {"unknown"}, {"list", "review"}, {"status", "--dry-run"}, {"on"}, {"off", "a", "b"}, {"on", "../review"}, {"on", "."}, {"off", "--bad", "review"}} {
+	for _, args := range [][]string{nil, {"unknown"}, {"list", "review"}, {"status", "--dry-run"}, {"on"}, {"off", "a", "b"}, {"on", "", "review"}, {"on", "../review"}, {"on", "."}, {"off", "--bad", "review"}} {
 		if _, err := parse(args); err == nil {
 			t.Errorf("accepted %v", args)
 		}

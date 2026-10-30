@@ -1,20 +1,37 @@
-# Creating features
+# Creating features and configuring stores
 
-A feature is an immediate directory under `~/.local/share/toggle/` or a repo's `.toggle/`. Its directory name is its name. Put installable files under `source/`, mirroring their destination paths:
+A feature is an immediate directory containing `source/`. Its directory name is its name. Source files mirror their destination paths:
 
 ```text
-~/.local/share/toggle/review/
+/path/to/feature-repo/
   README.md
-  source/
-    .agents/skills/review/SKILL.md
+  review/
+    README.md
+    source/
+      .agents/skills/review/SKILL.md
 ```
 
-This defines `review`, which installs `.agents/skills/review/SKILL.md`. The top level is reserved for optional metadata such as README files; toggle installs only files under `source/`. No manifest, name declaration, mapping, or create command is needed. JSON and JSONC are ordinary whole files.
+Only files under `review/source/` are installed. Top-level metadata stays in the definition. No manifest or create command is needed. JSON and JSONC files are copied whole.
 
-Installation targets cannot be `.gitignore` files or `.git` entries, including files beneath a `.git` directory, at any depth. This also applies to resolved destinations reached through symlinks. A top-level feature `.gitignore` outside `source/` is metadata and is not installed.
+Register existing checkout directories in `~/.config/toggle/config.json`:
 
-Use `.toggle/review/source/` for a repo-specific definition. It replaces the same-named global feature within that repo; sources are not combined. The repo owner decides whether to commit or ignore `.toggle/` with ordinary Git configuration. Toggle adds no ignore rules for definitions.
+```json
+{"stores":{"team":"/absolute/path/to/feature-repo"}}
+```
 
-`toggle list` shows available features and their selected directory paths, whether on or off. It finds local features from anywhere inside the repo. Outside Git it shows global features. Discovery is flat: `group/review/source/` is not discovered from the global root unless `group` itself contains `source/`.
+Paths must be absolute. Names are nonempty strings with no reserved values. You clone, edit, commit, pull, and push these repositories yourself; toggle only reads their current files. Discovery is flat, so a nested `group/review/source/` is not found unless the configured root is `group/`.
 
-Removing a local override selects the remaining global feature. If no definition remains for an installed feature, cleanup is manual.
+A repo-local `.toggle/review/source/` uses the same layout and needs no user config. The repo owner chooses whether to commit or ignore `.toggle/` using ordinary Git configuration. Toggle does not manage that choice.
+
+`toggle list` shows every definition with its source path and usable selector. Same-named features are separate definitions. A bare name must have exactly one match; neither local nor named stores have precedence:
+
+```sh
+toggle on review --local
+toggle on review --store team
+```
+
+`--local` and `--store` are mutually exclusive. A configured store named `local` is an ordinary named store, selected with `--store local`. Explicit selection does not require unrelated source checkouts to be available. Bare selection and full catalog scans require their sources to be readable.
+
+The former `~/.local/share/toggle/` location has no automatic meaning. Existing definitions there can be moved into an owned checkout and configured explicitly; toggle never migrates them automatically.
+
+Installation targets cannot be `.gitignore` files, `.git` entries or their descendants, Git metadata, or `.toggle/` contents. Feature-definition directories from local/configured sources that overlap the destination repo are protected too, including unselected definitions and aliases. Source files must resolve within their feature's source tree.

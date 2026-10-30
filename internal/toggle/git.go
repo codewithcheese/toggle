@@ -12,7 +12,15 @@ import (
 )
 
 type repo struct {
-	root, gitDir, commonDir, excludePath, recordPath string
+	root, gitDir, commonDir, excludePath, indexPath string
+	query                                           func(context.Context, string, []byte, ...string) ([]byte, error)
+}
+
+func (r *repo) command(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+	if r.query != nil {
+		return r.query(ctx, r.root, input, args...)
+	}
+	return git(ctx, r.root, input, args...)
 }
 
 func git(ctx context.Context, cwd string, input []byte, args ...string) ([]byte, error) {
@@ -51,7 +59,7 @@ func (r *repo) metadata(ctx context.Context) error {
 		{[]string{"--absolute-git-dir"}, &r.gitDir},
 		{[]string{"--path-format=absolute", "--git-common-dir"}, &r.commonDir},
 		{[]string{"--path-format=absolute", "--git-path", "info/exclude"}, &r.excludePath},
-		{[]string{"--path-format=absolute", "--git-path", "toggle.json"}, &r.recordPath},
+		{[]string{"--path-format=absolute", "--git-path", "index"}, &r.indexPath},
 	}
 	for _, q := range queries {
 		out, err := git(ctx, r.root, nil, append([]string{"rev-parse"}, q.args...)...)
@@ -74,23 +82,18 @@ func (r *repo) requireRoot(cwd string) error {
 	return nil
 }
 
-func (r *repo) tracked(ctx context.Context, paths ...string) (string, error) {
-	out, err := git(ctx, r.root, nil, "ls-files", "--cached", "-z")
+func (r *repo) index(ctx context.Context) (map[string]bool, error) {
+	out, err := r.command(ctx, nil, "ls-files", "--cached", "-z")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	for _, tracked := range bytes.Split(out, []byte{0}) {
-		for _, path := range paths {
-			rel, err := filepath.Rel(r.root, path)
-			if err != nil {
-				return "", err
-			}
-			if string(tracked) == filepath.ToSlash(rel) {
-				return path, nil
-			}
+	index := map[string]bool{}
+	for _, path := range bytes.Split(out, []byte{0}) {
+		if len(path) != 0 {
+			index[string(path)] = true
 		}
 	}
-	return "", nil
+	return index, nil
 }
 
 type ignoreMatch struct {
@@ -98,38 +101,28 @@ type ignoreMatch struct {
 }
 
 func (r *repo) ignore(ctx context.Context, relative string) (ignoreMatch, error) {
-	out, err := git(ctx, r.root, append([]byte(filepath.ToSlash(relative)), 0), "check-ignore", "--no-index", "-v", "-z", "--stdin")
+	matches, err := r.ignoreMany(ctx, append([]byte(filepath.ToSlash(relative)), 0))
+	return matches[filepath.ToSlash(relative)], err
+}
+
+func (r *repo) ignoreMany(ctx context.Context, input []byte) (map[string]ignoreMatch, error) {
+	matches := map[string]ignoreMatch{}
+	out, err := r.command(ctx, input, "check-ignore", "--no-index", "-v", "-z", "--stdin")
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == 1 {
-			return ignoreMatch{}, nil
+			return matches, nil
 		}
-		return ignoreMatch{}, err
+		return nil, err
 	}
 	parts := bytes.Split(out, []byte{0})
-	if len(parts) < 4 {
-		return ignoreMatch{}, fmt.Errorf("invalid Git ignore response for %s", relative)
+	if (len(parts)-1)%4 != 0 {
+		return nil, fmt.Errorf("invalid Git ignore response")
 	}
-	return ignoreMatch{source: string(parts[0]), line: string(parts[1]), pattern: string(parts[2])}, nil
-}
-
-// A new exact info/exclude entry follows earlier info/exclude entries and
-// outranks global excludes. Only a per-directory .gitignore negation that
-// currently wins can override it. Git supplies the winning rule, including
-// the parent-directory traversal semantics, without changing any ignore file.
-func (r *repo) exclusionAllowed(ctx context.Context, relative string) error {
-	match, err := r.ignore(ctx, relative)
-	if err != nil {
-		return err
+	for i := 0; i+3 < len(parts); i += 4 {
+		matches[string(parts[i+3])] = ignoreMatch{source: string(parts[i]), line: string(parts[i+1]), pattern: string(parts[i+2])}
 	}
-	if !strings.HasPrefix(match.pattern, "!") || filepath.IsAbs(match.source) || filepath.Base(match.source) != ".gitignore" {
-		return nil
-	}
-	dir := filepath.Dir(match.source)
-	if dir == "." || within(filepath.Join(r.root, dir), filepath.Join(r.root, relative)) {
-		return fmt.Errorf("local exclusion is overridden by %s:%s (%s)", match.source, match.line, match.pattern)
-	}
-	return nil
+	return matches, nil
 }
 
 func readOptional(path string) ([]byte, error) {
